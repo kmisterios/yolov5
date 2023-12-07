@@ -27,6 +27,7 @@ import yaml
 from PIL import ExifTags, Image, ImageOps
 from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
+import pydicom
 
 from utils.augmentations import (Albumentations, augment_hsv, classify_albumentations, classify_transforms, copy_paste,
                                  letterbox, mixup, random_perspective)
@@ -37,7 +38,7 @@ from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
 HELP_URL = 'See https://docs.ultralytics.com/yolov5/tutorials/train_custom_data'
-IMG_FORMATS = 'bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp', 'pfm'  # include image suffixes
+IMG_FORMATS = 'bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp', 'pfm', "dicom", "dcm", "pgm"  # include image suffixes
 VID_FORMATS = 'asf', 'avi', 'gif', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'ts', 'wmv'  # include video suffixes
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -47,6 +48,26 @@ PIN_MEMORY = str(os.getenv('PIN_MEMORY', True)).lower() == 'true'  # global pin_
 for orientation in ExifTags.TAGS.keys():
     if ExifTags.TAGS[orientation] == 'Orientation':
         break
+
+def read_dicom(path):
+    img = pydicom.dcmread(path)
+    img = np.array(img.pixel_array, dtype=np.float32)
+    img = (img - img.min()) / (img.max() - img.min()) * 255.
+    return img
+
+def load_image(img_path: str):
+    img_ext = Path(img_path).suffix
+    if img_ext in [".dcm", ".dicom"]:
+        image = read_dicom(img_path)
+        img_path_tmp = img_path.replace(img_ext, ".png")
+        cv2.imwrite(img_path_tmp, image)
+        image = cv2.imread(img_path_tmp)
+        os.remove(img_path_tmp)
+    elif img_ext in [".png", ".pgm"]:
+        image = cv2.imread(img_path)
+    else:
+        raise ValueError(f"Can't load extesion {img_ext}")
+    return image
 
 
 def get_hash(paths):
@@ -304,7 +325,8 @@ class LoadImages:
         else:
             # Read image
             self.count += 1
-            im0 = cv2.imread(path)  # BGR
+            # im0 = cv2.imread(path)  # BGR
+            im0 = load_image(path)
             assert im0 is not None, f'Image Not Found {path}'
             s = f'image {self.count}/{self.nf} {path}: '
 

@@ -248,7 +248,7 @@ def run(
                     if save_crop:
                         save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.png', BGR=True)
                     
-                images_failed.append(str(p.absolute()))
+                # images_failed.append(str(p.absolute()))
             else:
                 images_failed.append(str(p.absolute()))
 
