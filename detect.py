@@ -50,6 +50,56 @@ from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreensh
 from utils.general import (LOGGER, Profile, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
                            increment_path, non_max_suppression, print_args, scale_boxes, strip_optimizer, xyxy2xywh)
 from utils.torch_utils import select_device, smart_inference_mode
+from PIL import Image
+from ultralytics.utils import ops
+
+
+def save_one_box(xyxy, im, file=Path('im.jpg'), gain=1.02, pad=10, square=False, BGR=False, save=True):
+    """
+    Save image crop as {file} with crop size multiple {gain} and {pad} pixels. Save and/or return crop.
+
+    This function takes a bounding box and an image, and then saves a cropped portion of the image according
+    to the bounding box. Optionally, the crop can be squared, and the function allows for gain and padding
+    adjustments to the bounding box.
+
+    Args:
+        xyxy (torch.Tensor or list): A tensor or list representing the bounding box in xyxy format.
+        im (numpy.ndarray): The input image.
+        file (Path, optional): The path where the cropped image will be saved. Defaults to 'im.jpg'.
+        gain (float, optional): A multiplicative factor to increase the size of the bounding box. Defaults to 1.02.
+        pad (int, optional): The number of pixels to add to the width and height of the bounding box. Defaults to 10.
+        square (bool, optional): If True, the bounding box will be transformed into a square. Defaults to False.
+        BGR (bool, optional): If True, the image will be saved in BGR format, otherwise in RGB. Defaults to False.
+        save (bool, optional): If True, the cropped image will be saved to disk. Defaults to True.
+
+    Returns:
+        (numpy.ndarray): The cropped image.
+
+    Example:
+        ```python
+        from ultralytics.utils.plotting import save_one_box
+
+        xyxy = [50, 50, 150, 150]
+        im = cv2.imread('image.jpg')
+        cropped_im = save_one_box(xyxy, im, file='cropped.jpg', square=True)
+        ```
+    """
+
+    if not isinstance(xyxy, torch.Tensor):  # may be list
+        xyxy = torch.stack(xyxy)
+    b = ops.xyxy2xywh(xyxy.view(-1, 4))  # boxes
+    if square:
+        b[:, 2:] = b[:, 2:].max(1)[0].unsqueeze(1)  # attempt rectangle to square
+    b[:, 2:] = b[:, 2:] * gain + pad  # box wh * gain + pad
+    xyxy = ops.xywh2xyxy(b).long()
+    xyxy = ops.clip_boxes(xyxy, im.shape)
+    crop = im[int(xyxy[0, 1]):int(xyxy[0, 3]), int(xyxy[0, 0]):int(xyxy[0, 2]), ::(1 if BGR else -1)]
+    if save:
+        file.parent.mkdir(parents=True, exist_ok=True)  # make directory
+        f = str(increment_path(file))
+        # cv2.imwrite(f, crop)  # save BGR, https://github.com/ultralytics/yolov5/issues/7007 chroma subsampling issue
+        Image.fromarray(crop[..., ::-1]).save(f, quality=100, subsampling=0)  # save RGB
+    return crop
 
 
 @smart_inference_mode()
@@ -117,6 +167,7 @@ def run(
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    images_failed = []
     for path, im, im0s, vid_cap, s in dataset:
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -195,7 +246,11 @@ def run(
                         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
                         annotator.box_label(xyxy, label, color=colors(c, True))
                     if save_crop:
-                        save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                        save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.png', BGR=True)
+                    
+                images_failed.append(str(p.absolute()))
+            else:
+                images_failed.append(str(p.absolute()))
 
             # Stream results
             im0 = annotator.result()
@@ -237,6 +292,8 @@ def run(
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     if update:
         strip_optimizer(weights[0])  # update model (to fix SourceChangeWarning)
+    
+    return images_failed, save_dir
 
 
 def parse_opt():
