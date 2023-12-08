@@ -53,6 +53,8 @@ def read_dicom(path):
     img = pydicom.dcmread(path)
     img = np.array(img.pixel_array, dtype=np.float32)
     img = (img - img.min()) / (img.max() - img.min()) * 255.
+    if np.isclose(np.median(img), 255.):
+        img = 255. - img
     return img
 
 def load_image(img_path: str):
